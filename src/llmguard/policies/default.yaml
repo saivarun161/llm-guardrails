@@ -1,0 +1,116 @@
+# The bundled policy. Two asymmetries in here are deliberate.
+#
+# Injection is blocked on the way in but only flagged on the way out. A model
+# repeating an attacker's phrasing back at you is evidence, not an attack, and
+# blocking it destroys the response that would have told you what happened.
+#
+# Credentials are redacted on the way in and blocked on the way out. A user
+# pasting their own API key into a prompt is a mistake worth cleaning up
+# silently; a model emitting one is a leak, and there is no version of that
+# response worth returning.
+version: 1
+name: default
+description: >-
+  Redact personal data, block confident prompt injection on input, and refuse to
+  return credentials on output.
+
+defaults:
+  redaction: label
+
+budget:
+  total_ms: 50
+  # Fail open: a missed redaction is bad, an outage on every request is worse.
+  # Flip this to fail_closed wherever unchecked text reaching the model is the
+  # incident you are actually trying to prevent.
+  on_exceeded: fail_open
+
+input:
+  rules:
+    - id: block-injection
+      detect: injection.prompt_injection
+      action: block
+      # 'high' needs two independent signals, or one strong signal plus evidence
+      # the payload was hidden. Blocking on a single signal is where the false
+      # positives live -- a support ticket quoting an attack would trip it.
+      min_severity: high
+      reason: prompt injection detected in user input
+
+    - id: flag-weak-injection
+      detect: injection
+      action: flag
+      min_severity: medium
+      reason: injection-shaped phrasing, below the blocking threshold
+
+    - id: redact-credentials
+      detect: pii.private_key
+      action: redact
+      redaction: label
+
+    - id: redact-aws-key
+      detect: pii.aws_key
+      action: redact
+      redaction: label
+
+    - id: redact-api-key
+      detect: pii.api_key
+      action: redact
+      redaction: label
+
+    - id: redact-jwt
+      detect: pii.jwt
+      action: redact
+      redaction: label
+
+    # Kept partial rather than fully masked: a support agent needs the last four
+    # digits to confirm a card with the caller, and forcing them out of the tool
+    # to get them is how the tool stops being used.
+    - id: redact-card
+      detect: pii.credit_card
+      action: redact
+      redaction: partial
+
+    - id: redact-ssn
+      detect: pii.ssn
+      action: redact
+      redaction: label
+      # Nine bare digits score 0.55; only separated, structurally valid numbers
+      # clear this bar. The rest still surface as findings under redact-pii.
+      min_confidence: 0.9
+
+    - id: redact-pii
+      detect: pii
+      action: redact
+      redaction: label
+
+output:
+  rules:
+    - id: block-credential-leak
+      detect: pii.private_key
+      action: block
+      reason: the response contained a private key
+
+    - id: block-aws-key-leak
+      detect: pii.aws_key
+      action: block
+      reason: the response contained an access key
+
+    - id: block-jwt-leak
+      detect: pii.jwt
+      action: block
+      reason: the response contained a bearer token
+
+    - id: redact-card-out
+      detect: pii.credit_card
+      action: redact
+      redaction: partial
+
+    - id: redact-pii-out
+      detect: pii
+      action: redact
+      redaction: label
+
+    - id: flag-injection-echo
+      detect: injection
+      action: flag
+      min_severity: medium
+      reason: the response echoed injection-shaped phrasing
