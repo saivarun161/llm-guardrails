@@ -1,0 +1,13 @@
+# Normalise line endings. Detector offsets are character offsets, and a stray
+# CRLF in a fixture would shift every span in the expected test output.
+* text=auto eol=lf
+
+*.py   text diff=python
+*.yaml text
+*.yml  text
+*.json text
+*.md   text
+*.toml text
+
+*.png binary
+*.jpg binary
