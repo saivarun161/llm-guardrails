@@ -69,7 +69,11 @@ STREAM_BLOCK_TEXT = (
     "schedule moved to the first Monday of the month after the audit, which is "
     "why the pair you were given in onboarding stopped working last week. I "
     "have checked and your user still has the deploy role attached, so nothing "
-    "needs to change on the permissions side. The access key for the staging "
+    "needs to change on the permissions side. If the deploy still fails after "
+    "this, it is worth clearing the cached profile in your home directory "
+    "first, because the old pair is usually still sitting there and the tooling "
+    "prefers it over anything you export in the shell. That has caught out two "
+    "people this month. The access key for the staging "
     "account is AKIAIOSFODNN7EXAMPLE; the matching secret is in the vault under "
     "the same path. Let me know once you have tested it."
 )

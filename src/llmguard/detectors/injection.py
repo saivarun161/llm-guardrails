@@ -27,6 +27,7 @@ see *why* something scored 3.5 rather than being handed a number.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from ..textnorm import base64_candidates, normalise, to_original
@@ -125,6 +126,21 @@ SIGNALS: tuple[Signal, ...] = (
 
 _SIGNALS_BY_NAME = {signal.name: signal for signal in SIGNALS}
 
+#: The widest span, in characters of the *original* text, that a finding from
+#: this detector may cover. It is load-bearing rather than descriptive: the
+#: streaming holdback is derived from it, so a finding wider than this could
+#: straddle the emit boundary and be seen only after its text was forwarded.
+#:
+#: 512 is the upper bound on a base64 run in :data:`llmguard.textnorm._B64_RE`,
+#: plus two padding characters, and every signal regex is bounded far below that
+#: on folded text. The number is necessary rather than obvious because folding
+#: does not preserve length in the direction that matters: a trigger phrase
+#: spelled with a zero-width character between every letter folds to thirty
+#: characters and occupies arbitrarily many original ones. A hit that needs more
+#: than this many original characters is therefore *not reported at all* --
+#: see :meth:`InjectionDetector.scan`.
+MAX_MATCH_LEN = 514
+
 #: Extra weight for a payload that was hidden rather than written plainly.
 OBFUSCATION_WEIGHT = 1.5
 
@@ -172,18 +188,51 @@ def describe(signal_names: tuple[str, ...]) -> list[str]:
     return out
 
 
+def _cluster(spans: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Merge overlapping and nearby spans, never past :data:`MAX_MATCH_LEN`.
+
+    Greedy over sorted starts: a span joins the open cluster only while the
+    result still fits inside the bound, so every cluster returned is within it
+    without needing a truncation step afterwards.
+    """
+    clusters: list[tuple[int, int]] = []
+    for start, end in sorted(set(spans)):
+        if clusters and end - clusters[-1][0] <= MAX_MATCH_LEN:
+            clusters[-1] = (clusters[-1][0], max(clusters[-1][1], end))
+        else:
+            clusters.append((start, end))
+    return clusters
+
+
 class InjectionDetector:
     """Scores prompt-injection signals over normalised text."""
 
     name = "injection"
     kinds = ("prompt_injection",)
 
-    #: The longest span a signal can match. Every pattern is bounded by explicit
-    #: ``{0,40}`` style limits precisely so this number exists; the streaming
-    #: holdback is derived from it.
-    max_match_len = 200
+    #: See :data:`MAX_MATCH_LEN`. Every finding :meth:`scan` returns is no wider
+    #: than this, by construction rather than by inspection of the patterns.
+    max_match_len = MAX_MATCH_LEN
 
     def scan(self, text: str) -> list[Finding]:
+        """Findings for every cluster of signals, none wider than the bound.
+
+        Two things here exist only to keep :data:`MAX_MATCH_LEN` honest, and
+        both cost a little detection to do it.
+
+        A hit whose *original* span is wider than the bound is discarded. That
+        is the zero-width padding case: the folded text still reads as a trigger
+        phrase, but following it would need a window this detector has promised
+        not to need. Reporting it would make the batch result depend on how much
+        text happened to be buffered, which is precisely the divergence the
+        streaming guarantee rules out. Dropping it makes batch and stream agree
+        on missing it, which is worse detection and honest arithmetic.
+
+        Hits far apart become separate findings rather than one finding spanning
+        the gap between them. The score is still computed over every signal seen
+        anywhere in the text -- an attack does not become weaker for being spread
+        out -- so what changes is the span each finding covers, not the verdict.
+        """
         folded, index = normalise(text)
         hits: dict[str, tuple[int, int]] = {}
 
@@ -191,7 +240,9 @@ class InjectionDetector:
             match = signal.regex.search(folded)
             if match is None:
                 continue
-            hits[signal.name] = to_original(index, match.start(), match.end(), len(text))
+            span = to_original(index, match.start(), match.end(), len(text))
+            if span[1] - span[0] <= MAX_MATCH_LEN:
+                hits[signal.name] = span
 
         obfuscated = self._scan_encoded(text, hits)
 
@@ -210,8 +261,7 @@ class InjectionDetector:
 
         total = score(names)
         severity = severity_for(total)
-        start = min(span[0] for span in hits.values())
-        end = max(span[1] for span in hits.values())
+        confidence = min(0.99, round(total / 5.0, 3))
 
         return [
             Finding(
@@ -220,10 +270,11 @@ class InjectionDetector:
                 start=start,
                 end=min(end, len(text)),
                 severity=severity,
-                confidence=min(0.99, round(total / 5.0, 3)),
+                confidence=confidence,
                 detail=f"score {total} from {len(names)} signal(s)",
                 signals=names,
             )
+            for start, end in _cluster(hits.values())
         ]
 
     def _scan_encoded(self, text: str, hits: dict[str, tuple[int, int]]) -> bool:
