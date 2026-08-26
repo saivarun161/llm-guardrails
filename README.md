@@ -101,16 +101,16 @@ Same phrase, different verdict, because blocking takes two independent signals.
 **Three. The same output at every chunk size.**
 
 ```
-  holdback 391 characters, derived from the active detectors:
+  holdback 514 characters, derived from the active detectors:
+    injection    longest possible match 514
     pii          longest possible match 391
-    injection    longest possible match 200
 
   chunk size   identical to non-streaming   card digits leaked   emits
   ----------------------------------------------------------------------
-  1            yes                          no                   230
-  3            yes                          no                   78
-  8            yes                          no                   31
-  64           yes                          no                   4
+  1            yes                          no                   122
+  3            yes                          no                   41
+  8            yes                          no                   16
+  64           yes                          no                   2
   4096         yes                          no                   1
 ```
 
@@ -120,15 +120,16 @@ sent:
 ```
   chunk size   blocked   characters emitted before the block   key leaked
   --------------------------------------------------------------------------
-  1            True      77                                   no
-  3            True      77                                   no
-  8            True      73                                   no
-  64           True      57                                   no
+  1            True      223                                  no
+  3            True      221                                  no
+  8            True      222                                  no
+  64           True      190                                  no
 ```
 
-Seventy-seven characters of ordinary prose go out. The key does not — at any
-chunk size, including one character at a time, where the first three characters
-of `AKIA...` arrive long before anything identifies them as a credential.
+A couple of hundred characters of ordinary prose go out. The key does not — at
+any chunk size, including one character at a time, where the first three
+characters of `AKIA...` arrive long before anything identifies them as a
+credential.
 
 **Four. Repair locally, regenerate only when you must.** Fenced JSON with an
 unquoted key, a Python literal, two stringified numbers, a scalar where an array
@@ -299,8 +300,8 @@ from llmguard import Guard, StreamGuard
 from llmguard.detectors import build
 from llmguard.detectors.pii import PiiDetector
 
-# The JWT pattern accounts for most of the default 391-character window, and the
-# injection detector for 200 of the rest.
+# Injection sets the default 514-character window; among the PII patterns the
+# JWT one is the widest, at 391.
 guard = Guard(detectors={"pii": PiiDetector(kinds=("email", "credit_card", "ssn"))})
 StreamGuard(guard).holdback  # 96
 
@@ -311,16 +312,36 @@ guard = Guard(
         **build(["injection"]),
     }
 )
-StreamGuard(guard).holdback  # 200
+StreamGuard(guard).holdback  # 514
 ```
 
 Passing `detectors=` explicitly means exactly those run: a detector the policy
 mentions but the dict omits is simply never applied, so narrow the policy too if
 you want the rules to match what is actually being checked.
 
-The cost is real and worth naming: with the default policy, 391 characters of the
+The cost is real and worth naming: with the default policy, 514 characters of the
 response are always one step behind the model. For a chat UI that is invisible;
 for something rendering partial JSON it may not be.
+
+### What the bound costs the detectors
+
+A detector that declares *H* has to keep to it, and the injection detector cannot
+keep to any *H* for free. It matches on a folded copy of the text, and folding
+does not preserve length in the direction that matters: `ignore all previous
+instructions` with a zero-width character between every letter folds to the same
+thirty characters and occupies six hundred real ones. Following that would need
+a window the detector has promised not to need — and reporting it anyway would
+make the answer depend on how much text happened to be buffered, which is the
+divergence this whole design rules out.
+
+So a hit needing more than 514 original characters is **not reported at all**,
+in batch as well as in streaming. That is worse detection in exchange for an
+arithmetic the streaming path can actually honour, and it is the one place where
+the guarantee is paid for in coverage rather than in latency. Two signals far
+apart are handled the other way, by reporting them as separate findings rather
+than one span covering the filler between them; the score still runs over every
+signal seen anywhere in the text, so spreading an attack out does not weaken the
+verdict.
 
 ---
 
@@ -413,6 +434,20 @@ the false positives live, and the first support ticket quoting an attack would
 trip it. Evidence that a payload was *hidden* counts as a second signal on its
 own, because benign text does not arrive wrapped in zero-width characters.
 
+**`max_match_len` is a promise, and it is now enforced rather than asserted.**
+The holdback is derived from it, so a detector returning a span wider than the
+number it declares lets a match straddle the emit boundary — the exact failure
+the design exists to prevent. The injection detector used to declare 200 and
+have three ways past it: a base64 finding is attributed to the whole encoded
+run, which can be 512 characters; folding inflates a match's span in the
+original text without limit; and a finding covering every signal hit could span
+the thousands of characters between two of them. It now keeps to its bound by
+construction, and a test asserts the property directly on the findings of every
+detector rather than inferring it from a clean fuzz run. The leak counter stays,
+because the next detector can still get this wrong, and the streaming guard now
+clamps the emit boundary so that when one does the result is a missed redaction
+rather than duplicated output.
+
 **A blocked result never carries the payload.** `GuardResult.text` is empty on a
 block. Result objects end up in logs, and the entire job of a block is to stop
 that text from travelling. For the same reason `Finding` carries offsets and
@@ -465,6 +500,11 @@ installed for.
 - It is not a conformant JSON Schema implementation.
 - The heuristics are tuned on English. Signals matched on normalised text will
   fire on other scripts inconsistently.
+- It does not follow an injection trigger stretched across more than 514
+  characters with invisible padding. That is a deliberate consequence of the
+  holdback bound rather than an oversight, it applies to batch checks too, and
+  it is written up under [what the bound costs the
+  detectors](#what-the-bound-costs-the-detectors).
 - It adds a holdback window to streaming latency. That is a real cost, and the
   README would rather say so than have you discover it.
 
@@ -480,7 +520,7 @@ uv pip install -p .venv/bin/python -e ".[dev]"
 .venv/bin/ruff check . && .venv/bin/ruff format --check .
 ```
 
-230 tests, 96% statement and branch coverage, on Python 3.11 and 3.12. The
+273 tests, 96% statement and branch coverage, on Python 3.11 and 3.12. The
 streaming invariant is fuzzed over every chunk size of every fixture, and CI runs
 the same checks again through the installed console script — including the exit
 codes, because a shell script branching on them is the main non-interactive use.
