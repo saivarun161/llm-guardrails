@@ -7,11 +7,15 @@ chunk boundary.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from llmguard import Guard, StreamBlocked, StreamGuard, demo
 from llmguard.detectors.pii import PiiDetector
 from llmguard.metrics import GuardMetrics
+from llmguard.policy import Policy, Rule
+from llmguard.types import Action, Finding, Severity
 
 FIXTURES = [
     pytest.param(demo.STREAM_TEXT, id="support-reply"),
@@ -117,6 +121,74 @@ def test_raise_on_block_reports_how_much_already_went_out():
     assert excinfo.value.emitted > 0
     assert excinfo.value.reasons
     assert stream.blocked
+
+
+class _UnderstatedDetector:
+    """A detector that lies about its bound, to pin what happens when one does.
+
+    Every real detector is supposed to declare the longest span it can return.
+    This one declares four characters and returns forty, which is the mistake
+    the leak counter exists to catch -- and the situation in which the stream
+    must still not corrupt what it forwards.
+    """
+
+    name = "liar"
+    kinds = ("token",)
+    #: Declared 30, returns 45. The window a stream scans is the context plus the
+    #: pending buffer, each capped at the holdback, so a match between one and
+    #: two holdbacks long is still *visible* -- and can start inside the context,
+    #: which is text that has already been forwarded. That is the case that used
+    #: to rewind the emit boundary behind what was already sent.
+    max_match_len = 30
+    pattern = re.compile(r"SECRET[a-z]{39}")
+
+    def scan(self, text: str) -> list[Finding]:
+        return [
+            Finding(
+                detector=self.name,
+                kind="token",
+                start=match.start(),
+                end=match.end(),
+                severity=Severity.HIGH,
+                confidence=1.0,
+            )
+            for match in self.pattern.finditer(text)
+        ]
+
+
+def _lying_guard() -> Guard:
+    # Built by hand rather than from YAML: the loader rejects a detector it does
+    # not know, which is the behaviour under test everywhere else.
+    policy = Policy(
+        name="liar",
+        input_rules=(),
+        output_rules=(Rule(id="flag-token", detect="liar.token", action=Action.FLAG),),
+    )
+    return Guard(policy, metrics=GuardMetrics(), detectors={"liar": _UnderstatedDetector()})
+
+
+def test_an_understated_bound_leaks_but_never_duplicates():
+    """Regression: the straddle pullback could rewind behind already-sent text.
+
+    A finding starting inside the context dragged the emit boundary behind the
+    context, which pushed characters that had already been forwarded back into
+    the pending buffer and sent them a second time. The stream is allowed to
+    miss a redaction when a detector understates its bound -- that is what the
+    counter reports -- but it is not allowed to invent output.
+    """
+    guard = _lying_guard()
+    text = "ordinary prose that fills the context window. SECRET" + ("a" * 39) + ". and the tail."
+
+    for size in (1, 2, 3, 5, 8, 16, 40):
+        stream = StreamGuard(guard, "output", raise_on_block=False)
+        pieces = [stream.feed(text[i : i + size]) for i in range(0, len(text), size)]
+        pieces.append(stream.close())
+        emitted = "".join(pieces)
+        assert len(emitted) <= len(text), f"chunk size {size} emitted more than it consumed"
+        assert text.startswith(emitted), f"chunk size {size} invented or reordered output"
+
+    # The counter did its job: this is exactly the condition it reports.
+    assert guard.metrics.stream_leaks.value() > 0
 
 
 def test_holdback_is_derived_from_the_active_detectors():

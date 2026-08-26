@@ -172,9 +172,17 @@ class StreamGuard:
 
         # A finding that straddles the emit boundary drags it back to the
         # finding's start, so no prefix of a match is ever forwarded.
+        #
+        # Clamped at ``base``: a finding starting inside the context began in
+        # text that already went out, and pulling the boundary behind ``base``
+        # would push those characters back into ``_pending`` and send them a
+        # second time. There is no un-sending them, so the honest response is to
+        # emit nothing further this round and let the leak counter below record
+        # that a detector understated its bound -- a missed redaction is bad, a
+        # corrupted stream is bad *and* confusing about why.
         for finding in findings:
             if finding.start < limit < finding.end:
-                limit = finding.start
+                limit = max(base, finding.start)
 
         emitted_chunk = scan_text[base:limit]
         final_findings = [f for f in findings if base <= f.start and f.end <= limit]
