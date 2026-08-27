@@ -4,10 +4,20 @@ import dataclasses
 
 import pytest
 
-from llmguard import Guard
+from llmguard import Guard, detectors
 from llmguard.budget import Budget
 from llmguard.metrics import GuardMetrics
 from llmguard.policy import default as default_policy
+
+
+@pytest.fixture(autouse=True)
+def _clean_registry():
+    """The detector registry is process-wide, so a test that adds to it must not
+    leak into the next one -- a stray custom detector would widen the holdback of
+    every ``*`` policy and quietly change what the streaming tests are asserting.
+    """
+    yield
+    detectors.reset()
 
 
 @pytest.fixture
