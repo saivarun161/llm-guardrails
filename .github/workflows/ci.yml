@@ -89,6 +89,23 @@ jobs:
       - name: The bundled policy is valid
         run: .venv/bin/llmguard policy validate
 
+      - name: The bundled detectors pass the harness the library asks others to use
+        # Run against the *installed* package, with no dev extras: the harness is
+        # documented as usable from any test suite, so it has to be in the wheel
+        # and importable without pytest. And a detector that quietly outgrew its
+        # max_match_len fails here for the same reason a third-party one would.
+        run: |
+          set -euo pipefail
+          .venv/bin/python - <<'PY'
+          from llmguard.detectors.injection import InjectionDetector
+          from llmguard.detectors.pii import PiiDetector
+          from llmguard.testing import assert_detector_contract
+
+          for detector in (PiiDetector(), PiiDetector(kinds=("email",)), InjectionDetector()):
+              assert_detector_contract(detector)
+              print(f"{detector.name}: holds to max_match_len {detector.max_match_len}")
+          PY
+
       - name: Streaming output is identical to non-streaming, at every chunk size
         run: |
           set -euo pipefail
