@@ -222,6 +222,15 @@ class PolicyError(ValueError):
     """A policy file is malformed, or names something that does not exist."""
 
 
+class DetectorContractError(ValueError):
+    """A detector does not keep the promises the rest of the library relies on.
+
+    Raised when registering a detector whose shape is wrong, and by
+    :mod:`llmguard.testing` when one breaks its ``max_match_len`` bound or any
+    of the other properties the streaming guard derives its correctness from.
+    """
+
+
 class StreamBlocked(RuntimeError):
     """Raised by the streaming guard when a block-level finding lands mid-stream.
 

@@ -113,11 +113,16 @@ class Policy:
         A policy that never mentions injection does not pay for injection
         scanning, and -- because the streaming holdback is derived from the active
         detector set -- also gets a shorter holdback.
+
+        ``*`` means everything currently registered, custom detectors included.
+        The corollary is that registering a detector widens the holdback of every
+        ``*`` policy, which is the honest answer: the window has to cover what is
+        actually being detected.
         """
         names: list[str] = []
         for rule in self.rules_for(stage):
             if rule.detect == "*":
-                return tuple(detector_registry.BUILTIN)
+                return tuple(detector_registry.registered())
             head = rule.detect.split(".", 1)[0]
             if head not in names:
                 names.append(head)
