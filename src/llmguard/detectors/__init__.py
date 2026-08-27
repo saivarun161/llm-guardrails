@@ -68,7 +68,7 @@ def register(factory: Factory, *, name: str | None = None, replace: bool = False
             f"detector factory {factory!r} must be callable with no arguments: {exc}"
         ) from exc
 
-    _validate(probe)
+    validate_shape(probe)
     resolved = name or probe.name
     if resolved != probe.name:
         raise DetectorContractError(
@@ -129,8 +129,12 @@ def suggest(label: str) -> str:
     return matches[0] if matches else ""
 
 
-def _validate(detector: object) -> None:
-    """The shape checks a policy and the holdback are computed from."""
+def validate_shape(detector: object) -> None:
+    """Check the attributes a policy and the holdback are computed from.
+
+    Shape only. Whether the detector *keeps* the ``max_match_len`` it declares is
+    a property of its behaviour on text; :mod:`llmguard.testing` checks that.
+    """
     name = getattr(detector, "name", None)
     if not isinstance(name, str) or not name or not valid_label(name) or "." in name:
         raise DetectorContractError(
@@ -173,4 +177,5 @@ __all__ = [
     "reset",
     "suggest",
     "unregister",
+    "validate_shape",
 ]
