@@ -319,6 +319,13 @@ Passing `detectors=` explicitly means exactly those run: a detector the policy
 mentions but the dict omits is simply never applied, so narrow the policy too if
 you want the rules to match what is actually being checked.
 
+The same arithmetic applies to anything you [register](#writing-your-own-detector):
+a `detect: '*'` rule resolves to whatever is registered at the time, so adding a
+detector widens the window of every wildcard policy. That is the honest answer
+rather than a surprise — the holdback has to cover what is actually being
+detected — but it is a reason to name detectors explicitly in a policy where the
+latency matters.
+
 The cost is real and worth naming: with the default policy, 514 characters of the
 response are always one step behind the model. For a chat UI that is invisible;
 for something rendering partial JSON it may not be.
@@ -342,6 +349,103 @@ apart are handled the other way, by reporting them as separate findings rather
 than one span covering the filler between them; the score still runs over every
 signal seen anywhere in the text, so spreading an attack out does not weaken the
 verdict.
+
+---
+
+## Writing your own detector
+
+The two that ship here cover what is generic. What gets a guardrail switched off
+is usually the thing that is not: an internal incident id, a customer reference
+with a house checksum, a document class that must never be quoted back.
+
+A detector is a `name`, its `kinds`, a `max_match_len` and a `scan`. Register it
+and a policy can name it:
+
+```python
+import re
+from llmguard import Guard, detectors
+from llmguard.types import Finding, Severity
+
+TICKET = re.compile(r"\bINC-\d{6}\b")
+
+
+class TicketDetector:
+    name = "ticket"
+    kinds = ("incident",)
+    max_match_len = 10  # len("INC-123456")
+
+    def scan(self, text):
+        return [
+            Finding("ticket", "incident", m.start(), m.end(), Severity.MEDIUM, 0.99)
+            for m in TICKET.finditer(text)
+        ]
+
+
+detectors.register(TicketDetector)
+Guard.from_file("house-rules.yaml").check_input("see INC-004212").text
+# 'see [INCIDENT]'
+```
+
+Until it is registered, `detect: ticket.incident` is a load error — the strict
+loader has no way to tell a house detector from a typo, and guessing in favour of
+the typo is how a rule ends up loading cleanly and never matching. Registration
+validates the shape the loader and the holdback are computed from, and refuses a
+registry key the detector does not answer to, since findings carry
+`detector=self.name` and a mismatch is that same silent never-fires.
+
+### Proving the bound
+
+`max_match_len` is the number `StreamGuard` withholds. A detector that
+understates it does not produce slightly different streaming output — it leaks,
+in the one place this library exists to be trustworthy. That makes the bound a
+claim someone has to check, so the harness that checks it ships too:
+
+```python
+from llmguard.testing import assert_detector_contract
+
+
+def test_ticket_detector_keeps_its_promises():
+    assert_detector_contract(TicketDetector(), ["ticket INC-004212 is open"])
+```
+
+It runs a corpus built to break what detectors usually assume — zero-width
+characters, combining marks, `ﬁ` and full-width digits that change length under
+NFKC, emoji outside the basic plane, long runs, and text where every second
+position could start a match — and for each case drives the real streaming guard
+at the chunk sizes where boundary bugs live, checking the result against the
+non-streaming one. Pass your own texts as well: the built-in cases are
+adversarial, not representative, and they know nothing about what you detect.
+
+Alongside the bound it checks what the rest of this README asserts and never
+verified outside its own suite — spans land inside the text, kinds are declared,
+findings carry the detector's own name and never their own matched text, and the
+same text scanned twice gives the same answer. `check_detector_contract` returns
+the violations as data if you would rather inspect them than raise:
+
+Here is the same detector with its bound quietly lowered from 10 to 8:
+
+```
+DetectorContractError: detector 'ticket' broke 3 contract check(s):
+  - bound: ticket.incident [2:12] is 10 characters, over the declared
+    max_match_len of 8. The streaming holdback is derived from that number, so a
+    wider match can straddle the emit boundary and leak. [case 'planted']
+  - stream: chunk size 1 produced different text from the non-streaming check; a
+    match is escaping the 8-character holdback window [case 'planted']
+  - leak: 9 finding(s) were detected only after their text had been emitted,
+    which is what an understated max_match_len looks like at runtime
+    [case 'planted']
+```
+
+Three views of one mistake: the span itself, the streamed output diverging from
+the batch output, and `llmguard_stream_leaks_total` — the counter the top of this
+README calls the honest one — moving off zero.
+
+No violation ever quotes the matched text. A detector corpus is usually built
+from real examples of the thing being detected, and a test runner's log is not
+where those belong — the case name and the offsets are enough to reproduce it.
+
+The library's own detectors are held to exactly this harness in
+`tests/test_contract_kit.py`, which is the only honest way to ship it.
 
 ---
 
@@ -448,6 +552,15 @@ because the next detector can still get this wrong, and the streaming guard now
 clamps the emit boundary so that when one does the result is a missed redaction
 rather than duplicated output.
 
+**The extension point ships with the harness that polices it.** Registering a
+detector is two lines; the reason it took longer to add is that letting a
+third-party detector into the holdback calculation moves the guarantee into code
+this repository does not own. Shipping the registry without
+[`llmguard.testing`](#proving-the-bound) would have meant advertising a property
+and simultaneously handing people the tool to break it silently. The harness is
+not a nicety attached to the feature — it is the half that makes the feature
+honest, which is why it lives in the library rather than in `tests/`.
+
 **A blocked result never carries the payload.** `GuardResult.text` is empty on a
 block. Result objects end up in logs, and the entire job of a block is to stop
 that text from travelling. For the same reason `Finding` carries offsets and
@@ -520,10 +633,15 @@ uv pip install -p .venv/bin/python -e ".[dev]"
 .venv/bin/ruff check . && .venv/bin/ruff format --check .
 ```
 
-273 tests, 96% statement and branch coverage, on Python 3.11 and 3.12. The
+321 tests, 96% statement and branch coverage, on Python 3.11 and 3.12. The
 streaming invariant is fuzzed over every chunk size of every fixture, and CI runs
 the same checks again through the installed console script — including the exit
 codes, because a shell script branching on them is the main non-interactive use.
+
+`tests/test_contract_kit.py` is worth a look if you are extending this: it runs
+the bundled detectors through the public conformance harness, and gives every
+check the harness can report a detector built to trip it, because a check that
+never fires is decoration.
 
 ## License
 

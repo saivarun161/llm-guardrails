@@ -5,7 +5,7 @@
     >>> guard.check_input("mail me at ada@example.com").text
     'mail me at [EMAIL]'
 
-Four pieces, usable together or separately:
+Five pieces, usable together or separately:
 
 ``Guard``
     Runs detectors under a latency budget and applies a YAML policy.
@@ -17,6 +17,12 @@ Four pieces, usable together or separately:
     regeneration round trip.
 ``GuardMetrics``
     Prometheus timeseries for all of it, with no second metrics dependency.
+``detectors`` and ``testing``
+    ``detectors.register`` makes a detector of your own addressable from a
+    policy; ``testing.assert_detector_contract`` is the harness that checks it
+    keeps the ``max_match_len`` promise the holdback window is derived from.
+    Imported on demand rather than here, so the runtime path never pays for the
+    test harness.
 """
 
 from __future__ import annotations
