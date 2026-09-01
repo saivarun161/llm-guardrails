@@ -30,6 +30,36 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
 
+  types:
+    # The package ships a py.typed marker, so these annotations are part of the
+    # public surface: a downstream service checks its own code against them.
+    # That makes a regression here someone else's build breaking, which is worth
+    # its own job rather than a step someone can skip locally.
+    name: types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          # The floor the package supports, which is what mypy is configured to
+          # target -- checking only on 3.12 would miss anything that relies on
+          # syntax or stdlib types 3.11 does not have.
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+
+      - name: Install the package
+        run: |
+          uv venv --python 3.11 .venv
+          uv pip install -p .venv/bin/python -e ".[dev]"
+
+      - run: .venv/bin/python -m mypy
+
   test:
     name: test (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
@@ -82,6 +112,26 @@ jobs:
         run: |
           uv venv --python 3.12 .venv
           uv pip install -p .venv/bin/python -e "."
+
+      - name: The type annotations survive into the built wheel
+        # py.typed in the source tree is not the claim, and neither is py.typed
+        # under the editable install this job uses -- both resolve to the
+        # checkout. The claim is about what a consumer downloads, so this looks
+        # inside the actual artefact. A build config that drops the marker makes
+        # llmguard untyped to every downstream checker while every other check
+        # in this workflow still passes.
+        run: |
+          set -euo pipefail
+          uv build --wheel -o dist
+          .venv/bin/python - <<'PY'
+          import pathlib
+          import zipfile
+
+          wheel = sorted(pathlib.Path("dist").glob("*.whl"))[-1]
+          names = zipfile.ZipFile(wheel).namelist()
+          assert "llmguard/py.typed" in names, f"py.typed missing from {wheel.name}: {names}"
+          print(f"py.typed present in {wheel.name}")
+          PY
 
       - name: The guided demo runs end to end, with no keys and no network
         run: .venv/bin/llmguard demo
