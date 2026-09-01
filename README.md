@@ -5,6 +5,7 @@
 [![Runtime dependencies: 1](https://img.shields.io/badge/runtime%20deps-1-brightgreen.svg)](pyproject.toml)
 [![Coverage 96%](https://img.shields.io/badge/coverage-96%25-brightgreen.svg)](#development)
 [![Ruff](https://img.shields.io/badge/lint-ruff-261230.svg)](https://docs.astral.sh/ruff/)
+[![Typed: mypy strict](https://img.shields.io/badge/typed-mypy%20strict-2a6db2.svg)](#development)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 Input and output safety middleware for LLM applications, built around one
@@ -370,11 +371,11 @@ TICKET = re.compile(r"\bINC-\d{6}\b")
 
 
 class TicketDetector:
-    name = "ticket"
-    kinds = ("incident",)
-    max_match_len = 10  # len("INC-123456")
+    name: str = "ticket"
+    kinds: tuple[str, ...] = ("incident",)
+    max_match_len: int = 10  # len("INC-123456")
 
-    def scan(self, text):
+    def scan(self, text: str) -> list[Finding]:
         return [
             Finding("ticket", "incident", m.start(), m.end(), Severity.MEDIUM, 0.99)
             for m in TICKET.finditer(text)
@@ -385,6 +386,15 @@ detectors.register(TicketDetector)
 Guard.from_file("house-rules.yaml").check_input("see INC-004212").text
 # 'see [INCIDENT]'
 ```
+
+The annotations are worth copying. `Detector` is a `Protocol` and protocol
+attributes are invariant, so a bare `kinds = ("incident",)` infers as
+`tuple[str]`, does not match the declared `tuple[str, ...]`, and fails a `mypy`
+check against `Detector` while working perfectly at runtime. The library shipped
+that exact mismatch in its own injection detector until the annotations went in.
+Nothing here requires you to type-check — `register` validates the same shape at
+runtime, and the checks below run either way — but if you do, this is the line
+that bites.
 
 Until it is registered, `detect: ticket.incident` is a load error — the strict
 loader has no way to tell a house detector from a typo, and guessing in favour of
@@ -598,6 +608,18 @@ validator is a deliberate subset — types, `required`, `enum`, `properties`,
 `items`, bounds, `pattern`, `additionalProperties` — with no `$ref`, no `allOf`
 and no remote resolution. Reach for `jsonschema` when you need those.
 
+**The annotations are published, so they are checked like an API.** The package
+carries a `py.typed` marker. Without it a downstream `mypy` run reports llm-guardrails
+as missing stubs and moves on, and every `GuardResult`, `Finding` and `Verdict`
+arrives in the caller's code as `Any` — type checking silently switched off at
+the boundary of the library whose entire pitch is a property you can rely on.
+Shipping the marker makes these annotations someone else's build dependency,
+which is the reason CI checks them under `--strict` in their own job rather than
+as a step at the end of the test matrix. It is also the reason `Detector` is now
+checked against the shape the README documents: a protocol nobody verifies is a
+docstring with extra syntax, and this one was quietly unsatisfiable by the
+library's own injection detector.
+
 **Metric labels come from small closed sets.** No label carries a rule's reason
 text or any part of the text being checked. A guardrail that blows up your
 metrics cardinality gets removed for a different reason than the one it was
@@ -631,9 +653,10 @@ uv pip install -p .venv/bin/python -e ".[dev]"
 
 .venv/bin/python -m pytest -q --cov --cov-report=term-missing
 .venv/bin/ruff check . && .venv/bin/ruff format --check .
+.venv/bin/python -m mypy
 ```
 
-321 tests, 96% statement and branch coverage, on Python 3.11 and 3.12. The
+328 tests, 96% statement and branch coverage, on Python 3.11 and 3.12. The
 streaming invariant is fuzzed over every chunk size of every fixture, and CI runs
 the same checks again through the installed console script — including the exit
 codes, because a shell script branching on them is the main non-interactive use.
