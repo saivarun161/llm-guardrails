@@ -21,6 +21,7 @@ import math
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import TypeVar, cast
 
 LabelValues = tuple[str, ...]
 
@@ -161,6 +162,11 @@ class Histogram(_Metric):
         return lines
 
 
+#: The metric classes a registry holds. Bound rather than constrained, so a
+#: subclass of one of them stays that subclass through :meth:`Registry._get_or_create`.
+_M = TypeVar("_M", bound="Counter | Gauge | Histogram")
+
+
 class Registry:
     """Holds the metric objects and renders a scrape."""
 
@@ -183,7 +189,15 @@ class Registry:
     ) -> Histogram:
         return self._get_or_create(Histogram(name, help, tuple(labelnames), buckets=tuple(buckets)))
 
-    def _get_or_create(self, metric):  # type: ignore[no-untyped-def]
+    def _get_or_create(self, metric: _M) -> _M:
+        """Register ``metric``, or return the equivalent one already registered.
+
+        Generic in the metric type rather than returning the union: the three
+        public accessors each promise a concrete class, and a union return type
+        would have them all lying by one widening. The ``type(existing)`` guard
+        below is what makes the cast at the end sound -- an ``existing`` that
+        survives it is the same class as ``metric``, which is ``_M``.
+        """
         with self._lock:
             existing = self._metrics.get(metric.name)
             if existing is not None:
@@ -191,7 +205,7 @@ class Registry:
                     raise ValueError(
                         f"metric {metric.name} already registered with a different shape"
                     )
-                return existing
+                return cast("_M", existing)
             self._metrics[metric.name] = metric
             return metric
 

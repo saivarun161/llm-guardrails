@@ -179,9 +179,16 @@ def assert_detector_contract(
 
 
 def _check_findings(
-    detector: object, case: str, text: str, findings: list[Finding]
+    detector: object, case: str, text: str, findings: list[object]
 ) -> list[Violation]:
-    """Everything decidable from one scan of one text."""
+    """Everything decidable from one scan of one text.
+
+    ``findings`` is ``list[object]`` because it is whatever the detector under
+    test returned. Annotating it ``list[Finding]`` would state a guarantee this
+    function exists to doubt, and would make the ``isinstance`` check below
+    statically dead -- so the first thing the harness checks is a detector
+    returning the wrong type, and the annotation has to leave room for it.
+    """
     out: list[Violation] = []
     name = detector.name  # type: ignore[attr-defined]
     kinds = set(detector.kinds)  # type: ignore[attr-defined]

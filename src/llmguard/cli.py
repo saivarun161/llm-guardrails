@@ -73,10 +73,18 @@ def _load_guard(args: argparse.Namespace) -> Guard:
 
 
 def _read_input(args: argparse.Namespace) -> str:
-    if args.text is not None:
-        return args.text
-    if args.file:
-        return Path(args.file).read_text(encoding="utf-8")
+    """Text from the argument, a file, or stdin, in that order.
+
+    The local annotations are load-bearing: ``argparse.Namespace`` types every
+    attribute as ``Any``, so without them the value flows out of here unchecked
+    and takes the rest of the CLI's type safety with it.
+    """
+    text: str | None = args.text
+    if text is not None:
+        return text
+    path: str | None = args.file
+    if path:
+        return Path(path).read_text(encoding="utf-8")
     return sys.stdin.read()
 
 

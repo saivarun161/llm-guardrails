@@ -109,8 +109,8 @@ def validate(value: JsonValue, schema: Schema, pointer: str = "") -> list[Schema
             return errors
 
     if "enum" in schema and value not in schema["enum"]:
-        allowed = ", ".join(json.dumps(option) for option in schema["enum"])
-        errors.append(SchemaError(pointer, f"value must be one of [{allowed}]"))
+        options = ", ".join(json.dumps(option) for option in schema["enum"])
+        errors.append(SchemaError(pointer, f"value must be one of [{options}]"))
 
     if isinstance(value, str):
         errors.extend(_validate_string(value, schema, pointer))
