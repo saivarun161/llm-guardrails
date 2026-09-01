@@ -207,12 +207,19 @@ def _cluster(spans: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
 class InjectionDetector:
     """Scores prompt-injection signals over normalised text."""
 
-    name = "injection"
-    kinds = ("prompt_injection",)
+    name: str = "injection"
+
+    #: Annotated rather than inferred: a bare ``("prompt_injection",)`` infers as
+    #: ``tuple[str]``, and :class:`~llmguard.detectors.base.Detector` declares
+    #: ``tuple[str, ...]``. Protocol attributes are invariant, so the narrower
+    #: type makes this class fail a static conformance check while behaving
+    #: correctly at runtime -- the kind of mismatch nobody notices until a user
+    #: types their own detector against the protocol.
+    kinds: tuple[str, ...] = ("prompt_injection",)
 
     #: See :data:`MAX_MATCH_LEN`. Every finding :meth:`scan` returns is no wider
     #: than this, by construction rather than by inspection of the patterns.
-    max_match_len = MAX_MATCH_LEN
+    max_match_len: int = MAX_MATCH_LEN
 
     def scan(self, text: str) -> list[Finding]:
         """Findings for every cluster of signals, none wider than the bound.

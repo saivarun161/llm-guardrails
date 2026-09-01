@@ -266,9 +266,9 @@ _PATTERNS: tuple[_Pattern, ...] = (
 class PiiDetector:
     """Scans for personal data and credentials with validated patterns."""
 
-    name = "pii"
-    kinds = tuple(pattern.kind for pattern in _PATTERNS)
-    max_match_len = max(pattern.max_match_len for pattern in _PATTERNS)
+    name: str = "pii"
+    kinds: tuple[str, ...] = tuple(pattern.kind for pattern in _PATTERNS)
+    max_match_len: int = max(pattern.max_match_len for pattern in _PATTERNS)
 
     def __init__(self, kinds: tuple[str, ...] | None = None) -> None:
         """Restrict to ``kinds`` to shrink the streaming holdback window.
